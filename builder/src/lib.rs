@@ -1,6 +1,6 @@
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, DeriveInput};
+use syn::{parse_macro_input, DeriveInput, Type};
 
 #[proc_macro_derive(Builder)]
 pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -22,6 +22,54 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         panic!("Builder macro only works on structs");
     };
 
+    let builder_fn = builder_fn(&ident, &builder_ident, &struct_fields);
+    let builder_struct = builder_struct(&ident, &builder_ident, &struct_fields, &struct_types);
+
+    let combined = quote! {
+        #builder_fn
+        #builder_struct
+    };
+
+    proc_macro::TokenStream::from(combined)
+}
+
+fn builder_fn(ident: &Ident, builder_ident: &Ident, struct_fields: &[Ident]) -> TokenStream {
+    quote! {
+        impl #ident {
+            pub fn builder() -> #builder_ident {
+                #builder_ident {
+                    #(#struct_fields: None),*
+                }
+            }
+        }
+    }
+}
+
+fn builder_struct(
+    ident: &Ident,
+    builder_ident: &Ident,
+    struct_fields: &[Ident],
+    struct_types: &[Type],
+) -> TokenStream {
+    // Verify that each field was set
+    let field_checkers: Vec<TokenStream> = struct_fields
+        .iter()
+        .map(|id| {
+            let err_str = format!("Field {id} was never set");
+            quote! { if self.#id.is_none() {
+                    return Err(String::from(#err_str).into())
+                }
+            }
+        })
+        .collect();
+
+    let set_fields_in_build_fn: Vec<TokenStream> = struct_fields
+        .iter()
+        .map(|id| {
+            quote! { #id: self.#id.clone().unwrap() }
+        })
+        .collect();
+
     let builder_fields: Vec<TokenStream> = struct_fields
         .iter()
         .zip(struct_types.iter())
@@ -39,34 +87,6 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         })
         .collect();
 
-    let field_checkers: Vec<TokenStream> = struct_fields
-        .iter()
-        .map(|id| {
-            let err_str = format!("Field {id} was never set");
-            quote! { if self.#id.is_none() {
-                    return Err(String::from(#err_str).into())
-                }
-            }
-        })
-        .collect();
-
-    let set_fields_in_build: Vec<TokenStream> = struct_fields
-        .iter()
-        .map(|id| {
-            quote! { #id: self.#id.clone().unwrap() }
-        })
-        .collect();
-
-    let builder_fn = quote! {
-        impl #ident {
-            pub fn builder() -> #builder_ident {
-                #builder_ident {
-                    #(#struct_fields: None),*
-                }
-            }
-        }
-    };
-
     let build_fn = quote! {
         pub fn build(&mut self) -> Result<#ident, Box<dyn std::error::Error>> {
             // Check all fields are set
@@ -74,13 +94,13 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
             Ok(
                 #ident {
-                    #(#set_fields_in_build),*
+                    #(#set_fields_in_build_fn),*
                 }
             )
         }
     };
 
-    let builder_st = quote! {
+    quote! {
         pub struct #builder_ident {
             #(#builder_fields),*
         }
@@ -91,12 +111,5 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
             #(#field_setters)*
         }
-    };
-
-    let combined = quote! {
-        #builder_fn
-        #builder_st
-    };
-
-    proc_macro::TokenStream::from(combined)
+    }
 }
