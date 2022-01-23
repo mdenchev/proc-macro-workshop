@@ -63,53 +63,31 @@ fn builder_struct(
         })
         .collect();
 
-    let set_fields_in_build_fn: Vec<TokenStream> = struct_fields
-        .iter()
-        .map(|id| {
-            quote! { #id: self.#id.clone().unwrap() }
-        })
-        .collect();
-
-    let builder_fields: Vec<TokenStream> = struct_fields
-        .iter()
-        .zip(struct_types.iter())
-        .map(|(id, ty)| quote! { #id: Option<#ty> })
-        .collect();
-
-    let field_setters: Vec<TokenStream> = struct_fields
-        .iter()
-        .zip(struct_types.iter())
-        .map(|(id, ty)| {
-            quote! { fn #id(&mut self, #id: #ty) -> &mut Self {
-                self.#id = Some(#id);
-                self
-            }}
-        })
-        .collect();
-
-    let build_fn = quote! {
-        pub fn build(&mut self) -> Result<#ident, Box<dyn std::error::Error>> {
-            // Check all fields are set
-            #(#field_checkers)*
-
-            Ok(
-                #ident {
-                    #(#set_fields_in_build_fn),*
-                }
-            )
-        }
-    };
-
     quote! {
         pub struct #builder_ident {
-            #(#builder_fields),*
+            #(#struct_fields: Option<#struct_types>),*
         }
 
         impl #builder_ident {
-            // Build
-            #build_fn
+            // Build method
+            pub fn build(&mut self) -> Result<#ident, Box<dyn std::error::Error>> {
+                // Check all fields are set
+                #(#field_checkers)*
 
-            #(#field_setters)*
+                Ok(
+                    #ident {
+                        #(#struct_fields: self.#struct_fields.clone().unwrap()),*
+                    }
+                )
+            }
+
+            // Setter methods
+            #(
+                fn #struct_fields(&mut self, #struct_fields: #struct_types) -> &mut Self {
+                    self.#struct_fields = Some(#struct_fields);
+                    self
+                }
+            )*
         }
     }
 }
