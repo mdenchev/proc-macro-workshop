@@ -51,8 +51,15 @@ fn builder_struct(
     struct_fields: &[Ident],
     struct_types: &[Type],
 ) -> TokenStream {
-    // Verify that each field was set
-    let field_checkers: Vec<TokenStream> = struct_fields
+    // Verify that each non-optional field was set
+    let (optional_fields, optional_types) = optional_fields(struct_fields, struct_types);
+    let (required_fields, required_types): (Vec<Ident>, Vec<Type>) = struct_fields
+        .iter()
+        .cloned()
+        .zip(struct_types.iter().cloned())
+        .filter(|(id, _ty)| !optional_fields.contains(id))
+        .unzip();
+    let field_checkers: Vec<TokenStream> = required_fields
         .iter()
         .map(|id| {
             let err_str = format!("Field {id} was never set");
@@ -62,6 +69,24 @@ fn builder_struct(
             }
         })
         .collect();
+
+    let required_field_setters = quote! {
+        #(
+            fn #required_fields(&mut self, #required_fields: #required_types) -> &mut Self {
+                self.#required_fields = Some(#required_fields);
+                self
+            }
+        )*
+    };
+
+    let optional_field_setters = quote! {
+        #(
+            fn #optional_fields(&mut self, #optional_fields: #optional_types) -> &mut Self {
+                self.#optional_fields = Some(Some(#optional_fields));
+                self
+            }
+        )*
+    };
 
     quote! {
         pub struct #builder_ident {
@@ -76,18 +101,42 @@ fn builder_struct(
 
                 Ok(
                     #ident {
-                        #(#struct_fields: self.#struct_fields.clone().unwrap()),*
+                        #(#required_fields: self.#required_fields.clone().unwrap()),*,
+                        #(#optional_fields: self.#optional_fields.clone().unwrap_or(None)),*
                     }
                 )
             }
 
             // Setter methods
-            #(
-                fn #struct_fields(&mut self, #struct_fields: #struct_types) -> &mut Self {
-                    self.#struct_fields = Some(#struct_fields);
-                    self
-                }
-            )*
+            #required_field_setters
+            #optional_field_setters
         }
     }
+}
+
+fn optional_fields(struct_fields: &[Ident], struct_types: &[Type]) -> (Vec<Ident>, Vec<Type>) {
+    let mut optionals = vec![];
+    let mut types = vec![];
+
+    for (id, ty) in struct_fields.iter().zip(struct_types.iter()) {
+        if let Type::Path(type_path) = ty {
+            if type_path.qself.is_some() {
+                continue;
+            }
+            let segments = &type_path.path.segments;
+            if let Some(ps) = segments.first() {
+                if ps.ident != "Option" {
+                    continue;
+                }
+                if let syn::PathArguments::AngleBracketed(generic_arg) = &ps.arguments {
+                    if let Some(syn::GenericArgument::Type(ty)) = generic_arg.args.first() {
+                        optionals.push(id.clone());
+                        types.push(ty.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    (optionals, types)
 }
